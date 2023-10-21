@@ -1,5 +1,5 @@
-# Streamlit secrets file
-secrets.toml
+# Streamlit
+.streamlit/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
