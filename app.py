@@ -23,52 +23,96 @@ import requests
 # - Group category
 # - Contact method
 # -> Google functionality <-
-# Number of reviews
-# Reviews by quality
+# Number of reviews (low priority)
+# Reviews by quality (low priority)
+
+ZULU_FORMAT = "%Y-%m-%dT%H:%M:00Z"
+
+people_categories = {}
 
 
 def init_keys():
+    os.environ["USER_AGENT"] = "CTE Sales Report Engine v0.1"
     os.environ["SQUARE_API_KEY"] = st.secrets["SQUARE_API_KEY"]
     os.environ["BOOKEO_API_KEY"] = st.secrets["BOOKEO_API_KEY"]
     os.environ["BOOKEO_SECRET_KEY"] = st.secrets["BOOKEO_SECRET_KEY"]
 
 
 @st.cache_data
-def fetch_square_data(start_dt, end_dt) -> dict:
+def fetch_square_data(start: dt.date, end: dt.date) -> dict:
     pass
 
 
 @st.cache_data
-def fetch_bookeo_data(start_dt, end_dt) -> dict:
-    pass
+def fetch_bookeo_data(start: dt.date, end: dt.date) -> list[dict]:
+    # https://www.bookeo.com/apiref/#tag/Bookings/paths/~1bookings/get
+    start = dt.datetime.combine(start, dt.time(0, 0))
+    end = dt.datetime.combine(end, dt.time(11, 59))
+
+    if (end - start).days >= 31:
+        date_overflow = True
+
+    res = requests.get(
+        "https://api.bookeo.com/v2/bookings",
+        params={
+            "startTime": start.strftime(ZULU_FORMAT),
+            "endTime": end.strftime(ZULU_FORMAT),
+            "secretKey": os.environ["BOOKEO_SECRET_KEY"],
+            "apiKey": os.environ["BOOKEO_API_KEY"],
+            "expandParticipants": False,
+            "itemsPerPage": 100,
+        },
+        headers={"User-Agent": os.environ["USER_AGENT"]},
+    )
+    print(res.json())
 
 
-def generate_display_report(start_dt, end_dt, **kwargs):
-    square_data = fetch_square_data(start_dt, end_dt)
-    bookeo_data = fetch_bookeo_data(start_dt, end_dt)
+@st.cache_data
+def fetch_people_categories() -> dict:
+    # https://www.bookeo.com/apiref/#tag/Settings/paths/~1settings~1peoplecategories/get
+    res = requests.get(
+        "https://api.bookeo.com/v2/settings/peoplecategories",
+        params={
+            "secretKey": os.environ["BOOKEO_SECRET_KEY"],
+            "apiKey": os.environ["BOOKEO_API_KEY"],
+        },
+        headers={"User-Agent": os.environ["USER_AGENT"]},
+    )
+    data = res.json()
+    if "categories" not in data.keys():
+        return None
+    return {c["id"]: c["name"] for c in data["categories"]}
+
+
+def generate_display_report(start: dt.date, end: dt.date, **kwargs):
+    square_data = fetch_square_data(start, end)
+    bookeo_data = fetch_bookeo_data(start, end)
     for arg in kwargs:
-        if arg:
-            st.write(arg)
+        if kwargs[arg]:
+            print(arg)
 
 
 def main():
+    people_categories = fetch_people_categories()
     st.write("# Escape Room Analytics")
     # https://docs.streamlit.io/library/api-reference/widgets/st.date_input
     today = dt.datetime.now(pytz.timezone("US/Eastern"))
     start_date = st.date_input(
         "Start date",
-        value=today.replace(day=1),
+        value=None,
         max_value=today,
         key="start_date",
         format="MM/DD/YYYY",
     )
     end_date = st.date_input(
         "End date",
+        value=None,
         max_value=today,
         key="end_date",
         format="MM/DD/YYYY",
     )
     st.write("## Parameters")
+    # https://docs.streamlit.io/library/api-reference/widgets/st.checkbox
     report_options = {
         "revenue": st.checkbox("Total revenue", value=False, key="revenue"),
         "booking_revenue": st.checkbox("Booking revenue", value=False, key="b_revenue"),
