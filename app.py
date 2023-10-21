@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
 import os
-import datetime
+import datetime as dt
+import pytz
 import requests
 
 # TODO:
@@ -31,10 +32,6 @@ def init_keys():
     os.environ["BOOKEO_SECRET_KEY"] = st.secrets["BOOKEO_SECRET_KEY"]
 
 
-def main():
-    st.write("Hello, world!")
-
-
 @st.cache_data
 def fetch_square_data(start_dt, end_dt) -> dict:
     pass
@@ -43,6 +40,25 @@ def fetch_square_data(start_dt, end_dt) -> dict:
 @st.cache_data
 def fetch_bookeo_data(start_dt, end_dt) -> dict:
     pass
+
+
+def main():
+    st.write("Hello, world!")
+    # https://docs.streamlit.io/library/api-reference/widgets/st.date_input
+    today = dt.datetime.now(pytz.timezone("US/Eastern"))
+    start_date = st.date_input(
+        "Start date",
+        value=today.replace(day=1),
+        max_value=today,
+        key="start_date",
+        format="MM/DD/YYYY",
+    )
+    end_date = st.date_input(
+        "End date",
+        max_value=today,
+        key="end_date",
+        format="MM/DD/YYYY",
+    )
 
 
 if __name__ == "__main__":
