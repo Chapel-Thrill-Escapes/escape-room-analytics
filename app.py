@@ -5,6 +5,8 @@ import datetime as dt
 import pytz
 import csv
 import requests
+import sqlite3
+from enum import Enum
 
 # TODO:
 # -> Square functionality <-
@@ -25,10 +27,10 @@ import requests
 # -> Google functionality <-
 # Number of reviews (low priority)
 # Reviews by quality (low priority)
+# -> Security features <-
+# Login screen: https://blog.streamlit.io/streamlit-authenticator-part-1-adding-an-authentication-component-to-your-app/
 
 ZULU_FORMAT = "%Y-%m-%dT%H:%M:00Z"
-
-people_categories = {}
 
 
 def init_keys():
@@ -38,36 +40,83 @@ def init_keys():
     os.environ["BOOKEO_SECRET_KEY"] = st.secrets["BOOKEO_SECRET_KEY"]
 
 
-@st.cache_data
+@st.cache_resource
+def init_db() -> sqlite3.Connection:
+    # TODO: Design schema, implement database
+    pass
+
+
+@st.cache_data(ttl="1 hour")
 def fetch_square_data(start: dt.date, end: dt.date) -> dict:
     pass
 
 
-@st.cache_data
+@st.cache_data(ttl="1 hour")
 def fetch_bookeo_data(start: dt.date, end: dt.date) -> list[dict]:
     # https://www.bookeo.com/apiref/#tag/Bookings/paths/~1bookings/get
     start = dt.datetime.combine(start, dt.time(0, 0))
     end = dt.datetime.combine(end, dt.time(11, 59))
 
-    if (end - start).days >= 31:
-        date_overflow = True
+    day_range = (end - start).days
+    data = []
+    block_start = start
+    for _ in range((day_range // 31) + 1):
+        block_end = block_start + dt.timedelta(days=31)
+        block_end = min(block_end, end)
+        res = requests.get(
+            "https://api.bookeo.com/v2/bookings",
+            params={
+                "startTime": block_start.strftime(ZULU_FORMAT),
+                "endTime": block_end.strftime(ZULU_FORMAT),
+                "secretKey": os.environ["BOOKEO_SECRET_KEY"],
+                "apiKey": os.environ["BOOKEO_API_KEY"],
+                "expandParticipants": True,
+                "itemsPerPage": 100,
+            },
+            headers={"User-Agent": os.environ["USER_AGENT"]},
+        )
+        if res.status_code == 200:
+            data.extend(res.json()["data"])
+        page_token = res.json()["info"].get("pageNavigationToken")
+        total_pages = res.json()["info"]["totalPages"]
+        page_number = 2
+        while page_number <= total_pages:
+            res = requests.get(
+                "https://api.bookeo.com/v2/bookings",
+                params={
+                    "pageNavigationToken": page_token,
+                    "pageNumber": page_number,
+                    "secretKey": os.environ["BOOKEO_SECRET_KEY"],
+                    "apiKey": os.environ["BOOKEO_API_KEY"],
+                    "expandParticipants": True,
+                    "itemsPerPage": 100,
+                },
+                headers={"User-Agent": os.environ["USER_AGENT"]},
+            )
+            if res.status_code == 200:
+                data.extend(res.json["data"])
+            page_number += 1
+        block_start = block_end + dt.timedelta(days=1)
 
-    res = requests.get(
-        "https://api.bookeo.com/v2/bookings",
-        params={
-            "startTime": start.strftime(ZULU_FORMAT),
-            "endTime": end.strftime(ZULU_FORMAT),
-            "secretKey": os.environ["BOOKEO_SECRET_KEY"],
-            "apiKey": os.environ["BOOKEO_API_KEY"],
-            "expandParticipants": False,
-            "itemsPerPage": 100,
-        },
-        headers={"User-Agent": os.environ["USER_AGENT"]},
-    )
-    print(res.json())
+    return data
+    return res.json()["data"]
 
 
-@st.cache_data
+def extract_bookeo_rows(data: list[dict]) -> pd.DataFrame:
+    # TODO: Implement this method to enable transition from JSON to SQL
+    pass
+
+
+@st.cache_data(ttl="7 days")
+def fetch_group_categories() -> dict:
+    pass
+
+
+def extract_group_category(data: dict) -> str:
+    pass
+
+
+@st.cache_data(ttl="7 days")
 def fetch_people_categories() -> dict:
     # https://www.bookeo.com/apiref/#tag/Settings/paths/~1settings~1peoplecategories/get
     res = requests.get(
@@ -80,67 +129,104 @@ def fetch_people_categories() -> dict:
     )
     data = res.json()
     if "categories" not in data.keys():
-        return None
+        return {}
     return {c["id"]: c["name"] for c in data["categories"]}
 
 
-def generate_display_report(start: dt.date, end: dt.date, **kwargs):
+def people_category(id: str) -> str:
+    categories = fetch_people_categories()
+    return categories.get(id, "ID not found")
+
+
+@st.cache_data(ttl="7 days")
+def fetch_products() -> list:
+    # https://www.bookeo.com/apiref/#tag/Settings/paths/~1settings~1products/get
+    res = requests.get(
+        "https://api.bookeo.com/v2/settings/products",
+        params={
+            "secretKey": os.environ["BOOKEO_SECRET_KEY"],
+            "apiKey": os.environ["BOOKEO_API_KEY"],
+            "itemsPerPage": 100,
+        },
+        headers={"User-Agent": os.environ["USER_AGENT"]},
+    )
+    data = res.json()
+    if res.status_code != 200 or "data" not in data.keys():
+        return {}
+    return [p["name"] for p in data["data"]]
+
+
+@st.cache_data(ttl="15 minutes")
+def generate_report(start: dt.date, end: dt.date, **options):
     square_data = fetch_square_data(start, end)
     bookeo_data = fetch_bookeo_data(start, end)
-    for arg in kwargs:
-        if kwargs[arg]:
-            print(arg)
+    bookeo_rows = extract_bookeo_rows(bookeo_data)
+    if options["product"]:
+        bookeo_data = [
+            b for b in bookeo_data if b.get("productName", "") in options["product"]
+        ]
+    print(len(bookeo_data))
 
 
 def main():
-    people_categories = fetch_people_categories()
     st.write("# Escape Room Analytics")
-    # https://docs.streamlit.io/library/api-reference/widgets/st.date_input
     today = dt.datetime.now(pytz.timezone("US/Eastern"))
     start_date = st.date_input(
         "Start date",
-        value=None,
         max_value=today,
         key="start_date",
         format="MM/DD/YYYY",
     )
     end_date = st.date_input(
         "End date",
-        value=None,
         max_value=today,
         key="end_date",
         format="MM/DD/YYYY",
     )
+    if end_date - start_date < dt.timedelta(days=0):
+        st.write("*End date cannot be before start date!*")
+        return
     st.write("## Parameters")
-    # https://docs.streamlit.io/library/api-reference/widgets/st.checkbox
     report_options = {
-        "revenue": st.checkbox("Total revenue", value=False, key="revenue"),
-        "booking_revenue": st.checkbox("Booking revenue", value=False, key="b_revenue"),
-        "invoice_revenue": st.checkbox("Invoice revenue", value=False, key="i_revenue"),
-        "rooms_booked": st.checkbox("Rooms booked", value=False, key="rooms_booked"),
-        "slots_booked": st.checkbox("Slots booked", value=False, key="slots_booked"),
-        "rooms_run": st.checkbox("Rooms run", value=False, key="rooms_run"),
-        "slots_run": st.checkbox("Slots run", value=False, key="slots_run"),
-        "cost_of_labor": st.checkbox("Cost of labor", value=False, key="cost_of_labor"),
-        "wages": st.checkbox("Wages", value=False, key="wages"),
-        "bonuses": st.checkbox("Bonuses", value=False, key="bonuses"),
-        "pricing_category": st.checkbox(
-            "Pricing category", value=False, key="cat_price"
+        "pricingcat": st.multiselect(
+            "Pricing category", options=pricing_options, placeholder="All categories"
         ),
-        "group_category": st.checkbox("Group category", value=False, key="cat_group"),
-        "contact_method": st.checkbox(
-            "Contact method", value=False, key="contact_method"
+        "groupcat": st.multiselect(
+            "Group category", options=group_options, placeholder="All categories"
         ),
+        "product": st.multiselect(
+            "Product", options=product_options, placeholder="All products"
+        ),
+        "revenue": st.checkbox("Total revenue"),
+        "booking_revenue": st.checkbox("Booking revenue"),
+        "invoice_revenue": st.checkbox("Invoice revenue"),
+        "rooms_booked": st.checkbox("Rooms booked"),
+        "slots_booked": st.checkbox("Slots booked"),
+        "rooms_run": st.checkbox("Rooms run"),
+        "slots_run": st.checkbox("Slots run"),
+        "cost_of_labor": st.checkbox("Cost of labor"),
+        "wages": st.checkbox("Wages"),
+        "bonuses": st.checkbox("Bonuses"),
+        "pricing_category": st.checkbox("Pricing category"),
+        "group_category": st.checkbox("Group category"),
+        "contact_method": st.checkbox("Contact method"),
     }
 
-    st.button(
-        "Generate report",
-        on_click=generate_display_report,
-        args=(start_date, end_date),
-        kwargs=report_options,
-    )
+    report_btn = st.button("Generate report")
+    if report_btn:
+        report = generate_report(start_date, end_date, **report_options)
 
 
 if __name__ == "__main__":
     init_keys()
+    conn = init_db()
+
+    PricingCategory = Enum("Price", [x for x in fetch_people_categories().values()])
+    pricing_options = [p.name for p in PricingCategory]
+    GroupCategory = Enum("Group", [])
+    group_options = [g.name for g in GroupCategory]
+
+    Product = Enum("Product", [x for x in fetch_products()])
+    product_options = [p.name for p in Product]
+
     main()
