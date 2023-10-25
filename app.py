@@ -41,7 +41,7 @@ def init_keys():
 
 
 @st.cache_resource
-def init_db() -> sqlite3.Connection:
+def get_db() -> sqlite3.Connection:
     # TODO: Design schema, implement database
     pass
 
@@ -51,14 +51,23 @@ def fetch_square_data(start: dt.date, end: dt.date) -> dict:
     pass
 
 
-@st.cache_data(ttl="1 hour")
-def fetch_bookeo_data(start: dt.date, end: dt.date) -> list[dict]:
+@st.cache_data(ttl="1 hour", show_spinner="Fetching latest data from Bookeo...")
+def update_bookings():
     # https://www.bookeo.com/apiref/#tag/Bookings/paths/~1bookings/get
-    start = dt.datetime.combine(start, dt.time(0, 0))
-    end = dt.datetime.combine(end, dt.time(23, 59))
-
+    # start = dt.datetime.combine(start, dt.time(0, 0))
+    # end = dt.datetime.combine(end, dt.time(23, 59))
+    conn = get_db()
+    qd = "DELETE FROM bookings"
+    conn.execute(qd)
+    qd = "DELETE FROM participants"
+    conn.execute(qd)
+    q1 = """INSERT INTO bookings
+        VALUES ..."""
+    q2 = """INSERT INTO participants
+        VALUES ..."""
+    end = dt.date.today()
+    start = dt.date(year=2023, month=1, day=1)
     day_range = (end - start).days
-    data = []
     block_start = start
     for _ in range((day_range // 31) + 1):
         block_end = block_start + dt.timedelta(days=31)
@@ -76,6 +85,7 @@ def fetch_bookeo_data(start: dt.date, end: dt.date) -> list[dict]:
             headers={"User-Agent": os.environ["USER_AGENT"]},
         )
         if res.status_code == 200:
+            conn.execute(q1, ...)
             data.extend(res.json()["data"])
         page_token = res.json()["info"].get("pageNavigationToken")
         total_pages = res.json()["info"]["totalPages"]
@@ -100,22 +110,39 @@ def fetch_bookeo_data(start: dt.date, end: dt.date) -> list[dict]:
     return data
 
 
-def extract_bookeo_rows(data: list[dict]) -> pd.DataFrame:
+# This function is likely not necessary.
+# def get_bookings(start: dt.date, end: dt.date) -> pd.DataFrame:
+#     conn = get_db()
+#     q = """SELECT *
+#     FROM bookings
+#     WHERE startTime BETWEEN ? AND ?"""
+#     bookings = conn.execute(q, (start, end)).fetchall()
+#     return pd.DataFrame(bookings)
+
+
+def extract_booking_participants(data: list[dict]) -> pd.DataFrame:
     # TODO: Implement this method to enable transition from JSON to SQL
+    if not data:
+        return pd.DataFrame()
+    df = pd.json_normalize(data)
+    print(df.columns)
+    print(df["participants.numbers"].tolist())
+    print(df["participants.details"].tolist())
     pass
 
 
-@st.cache_data(ttl="7 days")
-def fetch_group_categories() -> dict:
-    pass
+@st.cache_data(ttl="1 hour")
+def update_group_categories() -> dict:
+    conn = get_db()
+    q = """"""
 
 
 def extract_group_category(data: dict) -> str:
     pass
 
 
-@st.cache_data(ttl="7 days")
-def fetch_people_categories() -> dict:
+@st.cache_data("1 hour")
+def update_people_categories() -> dict:
     # https://www.bookeo.com/apiref/#tag/Settings/paths/~1settings~1peoplecategories/get
     res = requests.get(
         "https://api.bookeo.com/v2/settings/peoplecategories",
@@ -127,17 +154,35 @@ def fetch_people_categories() -> dict:
     )
     data = res.json()
     if "categories" not in data.keys():
-        return {}
-    return {c["id"]: c["name"] for c in data["categories"]}
+        return
+    cats = [(c["id"], c["name"]) for c in data["categories"]]
+    conn = get_db()
+    q = "DELETE FROM peopleCategories"
+    conn.execute(q)
+    q = """INSERT INTO peopleCategories (id, name)
+        VALUES (?, ?)"""
+    conn.executemany(q, cats)
+    conn.cursor().commit()
+
+
+def get_people_categories() -> list[str]:
+    conn = get_db()
+    q = "SELECT name FROM peopleCategories"
+    names = conn.execute(q).fetchall()
+    return [n for n in names]
 
 
 def people_category(id: str) -> str:
-    categories = fetch_people_categories()
-    return categories.get(id, "ID not found")
+    conn = get_db()
+    q = """SELECT name
+        FROM peopleCategories
+        WHERE id=?"""
+    name = conn.execute(q, (id,)).fetchone()[0]
+    return name or "ID not found"
 
 
-@st.cache_data(ttl="7 days")
-def fetch_products() -> list:
+@st.cache_data(ttl="1 hour")
+def update_products():
     # https://www.bookeo.com/apiref/#tag/Settings/paths/~1settings~1products/get
     res = requests.get(
         "https://api.bookeo.com/v2/settings/products",
@@ -150,23 +195,57 @@ def fetch_products() -> list:
     )
     data = res.json()
     if res.status_code != 200 or "data" not in data.keys():
-        return {}
-    return [p["name"] for p in data["data"]]
+        return
+    conn = get_db()
+    q = "DELETE FROM PRODUCTS"
+    conn.execute(q)
+    names = [p["name"] for p in data["data"]]
+    q = """INSERT INTO products (name)
+        VALUES (?)"""
+    conn.executemany(q, (names,))
+    conn.cursor().commit()
 
 
-@st.cache_data(ttl="15 minutes")
+def get_products() -> list[str]:
+    conn = get_db()
+    q = "SELECT name FROM products"
+    return conn.execute(q).fetchall()
+
+
+def get_rooms_booked(start: dt.date, end: dt.date) -> int:
+    conn = get_db()
+    q = """SELECT COUNT(*)
+        FROM bookings
+        WHERE startTime BETWEEN ? AND ?"""
+    return conn.execute(q, (start, end)).fetchone()
+
+
+def get_slots_booked(start: dt.date, end: dt.date) -> int:
+    conn = get_db()
+    q = """SELECT COUNT(*)
+        FROM participants p JOIN bookings b
+        ON p.bookingId=b.id
+        WHERE startTime BETWEEN ? AND ?"""
+    return conn.execute(q, (start, end)).fetchone()
+
+
 def generate_report(start: dt.date, end: dt.date, **options):
     square_data = fetch_square_data(start, end)
-    bookeo_data = fetch_bookeo_data(start, end)
-    bookeo_rows = extract_bookeo_rows(bookeo_data)
+    bookeo_data = fetch_bookeo_data(start, end, **options)
+    bookeo_rows = extract_booking_participants(bookeo_data)
     if options["product"]:
         bookeo_data = [
             b for b in bookeo_data if b.get("productName", "") in options["product"]
         ]
+    rooms_booked = get_rooms_booked()
+    slots_booked = get_slots_booked()
+    rooms_run = 0
+    slots_run = 0
     print(len(bookeo_data))
 
 
 def main():
+    update_bookings()
     st.write("# Escape Room Analytics")
     today = dt.datetime.now(pytz.timezone("US/Eastern"))
     start_date = st.date_input(
@@ -198,33 +277,29 @@ def main():
         "revenue": st.checkbox("Total revenue"),
         "booking_revenue": st.checkbox("Booking revenue"),
         "invoice_revenue": st.checkbox("Invoice revenue"),
-        "rooms_booked": st.checkbox("Rooms booked"),
-        "slots_booked": st.checkbox("Slots booked"),
-        "rooms_run": st.checkbox("Rooms run"),
-        "slots_run": st.checkbox("Slots run"),
         "cost_of_labor": st.checkbox("Cost of labor"),
         "wages": st.checkbox("Wages"),
         "bonuses": st.checkbox("Bonuses"),
-        "pricing_category": st.checkbox("Pricing category"),
-        "group_category": st.checkbox("Group category"),
         "contact_method": st.checkbox("Contact method"),
     }
 
     report_btn = st.button("Generate report")
+    force_cache_refresh = st.checkbox("Force cache refresh?")
     if report_btn:
+        if force_cache_refresh:
+            update_bookings.clear()
         report = generate_report(start_date, end_date, **report_options)
 
 
 if __name__ == "__main__":
     init_keys()
-    conn = init_db()
+    conn = get_db()
 
-    PricingCategory = Enum("Price", [x for x in fetch_people_categories().values()])
-    pricing_options = [p.name for p in PricingCategory]
+    pricing_options = [p for p in get_people_categories()]
     GroupCategory = Enum("Group", [])
     group_options = [g.name for g in GroupCategory]
 
-    Product = Enum("Product", [x for x in fetch_products()])
+    Product = Enum("Product", [x for x in get_products()])
     product_options = [p.name for p in Product]
 
     main()
