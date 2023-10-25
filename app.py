@@ -35,7 +35,7 @@ ZULU_FORMAT = "%Y-%m-%dT%H:%M:00Z"
 
 def init_keys():
     os.environ["USER_AGENT"] = "CTE Sales Report Engine v0.1"
-    os.environ["SQUARE_API_KEY"] = st.secrets["SQUARE_API_KEY"]
+    # os.environ["SQUARE_API_KEY"] = st.secrets["SQUARE_API_KEY"]
     os.environ["BOOKEO_API_KEY"] = st.secrets["BOOKEO_API_KEY"]
     os.environ["BOOKEO_SECRET_KEY"] = st.secrets["BOOKEO_SECRET_KEY"]
 
@@ -80,6 +80,7 @@ def fetch_bookeo_data(start: dt.date, end: dt.date) -> list[dict]:
         page_token = res.json()["info"].get("pageNavigationToken")
         total_pages = res.json()["info"]["totalPages"]
         page_number = 2
+
         while page_number <= total_pages:
             res = requests.get(
                 "https://api.bookeo.com/v2/bookings",
@@ -88,18 +89,15 @@ def fetch_bookeo_data(start: dt.date, end: dt.date) -> list[dict]:
                     "pageNumber": page_number,
                     "secretKey": os.environ["BOOKEO_SECRET_KEY"],
                     "apiKey": os.environ["BOOKEO_API_KEY"],
-                    "expandParticipants": True,
-                    "itemsPerPage": 100,
                 },
                 headers={"User-Agent": os.environ["USER_AGENT"]},
             )
             if res.status_code == 200:
-                data.extend(res.json["data"])
+                data.extend(res.json()["data"])
             page_number += 1
         block_start = block_end + dt.timedelta(days=1)
 
     return data
-    return res.json()["data"]
 
 
 def extract_bookeo_rows(data: list[dict]) -> pd.DataFrame:
