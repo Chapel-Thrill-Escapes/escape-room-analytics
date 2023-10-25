@@ -55,7 +55,7 @@ def fetch_square_data(start: dt.date, end: dt.date) -> dict:
 def fetch_bookeo_data(start: dt.date, end: dt.date) -> list[dict]:
     # https://www.bookeo.com/apiref/#tag/Bookings/paths/~1bookings/get
     start = dt.datetime.combine(start, dt.time(0, 0))
-    end = dt.datetime.combine(end, dt.time(11, 59))
+    end = dt.datetime.combine(end, dt.time(23, 59))
 
     day_range = (end - start).days
     data = []
