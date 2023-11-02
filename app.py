@@ -43,7 +43,7 @@ def init_keys():
 
 @st.cache_resource
 def get_db() -> sqlite3.Connection:
-    connection = sqlite3.connect(os.environ["DATABASE"])
+    connection = sqlite3.connect(os.environ["DATABASE"], check_same_thread=False)
     return connection
 
 
