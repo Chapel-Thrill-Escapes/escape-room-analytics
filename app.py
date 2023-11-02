@@ -6,6 +6,7 @@ import pytz
 import csv
 import requests
 import sqlite3
+import json
 from enum import Enum
 
 # TODO:
@@ -18,7 +19,6 @@ from enum import Enum
 # - Bonuses
 # -> Bookeo functionality <-
 # Rooms/slots booked
-# Rooms/slots run
 # Fill rate (low priority)
 # Customer segmentation
 # - Pricing category
@@ -48,11 +48,11 @@ def get_db() -> sqlite3.Connection:
 
 
 @st.cache_data(ttl="1 hour")
-def fetch_square_data(start: dt.date, end: dt.date):
+def fetch_square_data(start: dt.date, end: dt.date, **options):
     pass
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl="1 hour")
 def update_bookings():
     # https://www.bookeo.com/apiref/#tag/Bookings/paths/~1bookings/get
     conn = get_db()
@@ -254,17 +254,6 @@ def get_people_categories() -> list[str]:
     return [n[0] for n in names]
 
 
-def people_category(id: str) -> str:
-    conn = get_db()
-    cur = conn.cursor()
-    q = """SELECT name
-        FROM peopleCategories
-        WHERE id=?"""
-    name = cur.execute(q, (id,)).fetchone()[0]
-    cur.close()
-    return name or "ID not found"
-
-
 @st.cache_data(ttl="1 hour")
 def update_products():
     # https://www.bookeo.com/apiref/#tag/Settings/paths/~1settings~1products/get
@@ -298,41 +287,101 @@ def get_products() -> list[str]:
     q = "SELECT name FROM products"
     names = cur.execute(q).fetchall()
     cur.close()
-    return names
+    return [n[0] for n in names]
 
 
-def get_rooms_run(start: dt.date, end: dt.date) -> int:
+def get_rooms_booked(start: dt.date, end: dt.date, **options) -> int:
     update_bookings()
     conn = get_db()
     cur = conn.cursor()
-    q = """SELECT COUNT(DISTINCT startTime)
+    params = {"start": start, "end": end}
+    q = """SELECT COUNT(DISTINCT creationTime)
         FROM bookings
-        WHERE startTime BETWEEN ? AND ?
-        AND NOT canceled"""
-    count = cur.execute(q, (start, end)).fetchone()
+        WHERE creationTime BETWEEN :start AND :end
+        AND NOT canceled """
+    if options["product"]:
+        sq = "SELECT id FROM products WHERE name IN (SELECT value FROM json_each(?))"
+        product_ids = cur.execute(sq, (json.dumps(options["product"]),)).fetchall()
+        q += " AND productId IN (SELECT value FROM json_each(:product_ids)) "
+        params["product_ids"] = json.dumps([p[0] for p in product_ids])
+    count = cur.execute(q, params).fetchone()
     cur.close()
     return count[0]
 
 
-def get_slots_run(start: dt.date, end: dt.date) -> int:
+def get_slots_booked(start: dt.date, end: dt.date, **options) -> int:
     update_bookings()
     conn = get_db()
     cur = conn.cursor()
-    q = """SELECT COUNT(*), startTime
+    params = {"start": start, "end": end}
+    q = """SELECT COUNT(*)
         FROM participants p JOIN bookings b
         ON p.bookingId=b.id
-        WHERE startTime BETWEEN ? AND ?"""
-    count = cur.execute(q, (start, end)).fetchone()
+        WHERE creationTime BETWEEN :start AND :end"""
+    if options["product"]:
+        sq = "SELECT id FROM products WHERE name IN (SELECT value FROM json_each(?))"
+        product_ids = cur.execute(sq, (json.dumps(options["product"]),)).fetchall()
+        q += " AND productId IN (SELECT value FROM json_each(:product_ids)) "
+        params["product_ids"] = json.dumps([p[0] for p in product_ids])
+    count = cur.execute(q, params).fetchone()
     cur.close()
     return count[0]
+
+
+def get_rooms_run(start: dt.date, end: dt.date, **options) -> int:
+    update_bookings()
+    conn = get_db()
+    cur = conn.cursor()
+    params = {"start": start, "end": end}
+    q = """SELECT COUNT(DISTINCT startTime)
+        FROM bookings
+        WHERE startTime BETWEEN :start AND :end
+        AND NOT canceled """
+    if options["product"]:
+        sq = "SELECT id FROM products WHERE name IN (SELECT value FROM json_each(?))"
+        product_ids = cur.execute(sq, (json.dumps(options["product"]),)).fetchall()
+        q += " AND productId IN (SELECT value FROM json_each(:product_ids)) "
+        params["product_ids"] = json.dumps([p[0] for p in product_ids])
+    count = cur.execute(q, params).fetchone()
+    cur.close()
+    return count[0]
+
+
+def get_slots_run(start: dt.date, end: dt.date, **options) -> int:
+    update_bookings()
+    conn = get_db()
+    cur = conn.cursor()
+    params = {"start": start, "end": end}
+    q = """SELECT COUNT(*)
+        FROM participants p JOIN bookings b
+        ON p.bookingId=b.id
+        WHERE startTime BETWEEN :start AND :end"""
+    if options["product"]:
+        sq = "SELECT id FROM products WHERE name IN (SELECT value FROM json_each(?))"
+        product_ids = cur.execute(sq, (json.dumps(options["product"]),)).fetchall()
+        q += " AND productId IN (SELECT value FROM json_each(:product_ids)) "
+        params["product_ids"] = json.dumps([p[0] for p in product_ids])
+    count = cur.execute(q, params).fetchone()
+    cur.close()
+    return count[0]
+
+
+def get_revenue(start: dt.date, end: dt.date, **options) -> int:
+    return -1
 
 
 def generate_report(start: dt.date, end: dt.date, **options):
-    square_data = fetch_square_data(start, end)
-    if options["product"]:
-        pass
-    rooms_run = get_rooms_run(start, end)
-    slots_run = get_slots_run(start, end)
+    square_data = fetch_square_data(start, end, **options)
+    # print(start)
+    # print(end)
+    # print(options)
+    rooms_booked = get_rooms_booked(start, end, **options)
+    slots_booked = get_slots_booked(start, end, **options)
+    rooms_run = get_rooms_run(start, end, **options)
+    slots_run = get_slots_run(start, end, **options)
+    revenue = get_revenue(start, end, **options)
+    st.write(f"Rooms booked: {rooms_booked}")
+    st.write(f"Slots booked: {slots_booked}")
     st.write(f"Rooms run: {rooms_run}")
     st.write(f"Slots run: {slots_run}")
     rooms_run = 0
@@ -340,10 +389,6 @@ def generate_report(start: dt.date, end: dt.date, **options):
 
 
 def main():
-    force_cache_refresh = st.button("Force cache refresh")
-    if force_cache_refresh:
-        st.cache_data.clear()
-
     update_bookings()
     st.write("# Escape Room Analytics")
     today = dt.datetime.now(pytz.timezone("US/Eastern"))
@@ -375,15 +420,16 @@ def main():
         "product": st.multiselect(
             "Product", options=get_products(), placeholder="All products"
         ),
-        "revenue": st.checkbox("Total revenue"),
-        "booking_revenue": st.checkbox("Booking revenue"),
-        "invoice_revenue": st.checkbox("Invoice revenue"),
-        "cost_of_labor": st.checkbox("Cost of labor"),
-        "wages": st.checkbox("Wages"),
-        "bonuses": st.checkbox("Bonuses"),
-        "contact_method": st.checkbox("Contact method"),
     }
-
+    # "booking_revenue": st.checkbox("Booking revenue"),
+    # "invoice_revenue": st.checkbox("Invoice revenue"),
+    # "cost_of_labor": st.checkbox("Cost of labor"),
+    # "wages": st.checkbox("Wages"),
+    # "bonuses": st.checkbox("Bonuses"),
+    # "contact_method": st.checkbox("Contact method"),
+    force_cache_refresh = st.checkbox("Force cache refresh?")
+    if force_cache_refresh:
+        st.cache_data.clear()
     report_btn = st.button("Generate report")
     if report_btn:
         report = generate_report(start_date, end_date, **report_options)
