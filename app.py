@@ -18,10 +18,8 @@ from enum import Enum
 # - Hourly wages
 # - Bonuses
 # -> Bookeo functionality <-
-# Rooms/slots booked
 # Fill rate (low priority)
 # Customer segmentation
-# - Pricing category
 # - Group category
 # - Contact method
 # -> Google functionality <-
@@ -31,6 +29,14 @@ from enum import Enum
 # Login screen: https://blog.streamlit.io/streamlit-authenticator-part-1-adding-an-authentication-component-to-your-app/
 
 ZULU_FORMAT = "%Y-%m-%dT%H:%M:00Z"
+
+
+def BookeoUpdate(func):
+    def wrapper(*args, **kwargs):
+        update_bookings()
+        return func(*args, **kwargs)
+
+    return wrapper
 
 
 def init_keys():
@@ -45,11 +51,6 @@ def init_keys():
 def get_db() -> sqlite3.Connection:
     connection = sqlite3.connect(os.environ["DATABASE"], check_same_thread=False)
     return connection
-
-
-@st.cache_data(ttl="1 hour")
-def fetch_square_data(start: dt.date, end: dt.date, **options):
-    pass
 
 
 @st.cache_data(ttl="1 hour")
@@ -190,18 +191,6 @@ def update_bookings():
     cur.close()
 
 
-# def extract_booking_participants(data: list[dict]) -> pd.DataFrame:
-def extract_booking_participants(data: list[dict]) -> None:
-    # TODO: Implement this method to enable transition from JSON to SQL
-    if not data:
-        return
-    df = pd.json_normalize(data)
-    print(df.columns)
-    print(df["participants.numbers"].tolist())
-    print(df["participants.details"].tolist())
-    pass
-
-
 @st.cache_data(ttl="1 hour")
 def update_group_categories():
     return
@@ -290,8 +279,8 @@ def get_products() -> list[str]:
     return [n[0] for n in names]
 
 
+@BookeoUpdate
 def get_rooms_booked(start: dt.date, end: dt.date, **options) -> int:
-    update_bookings()
     conn = get_db()
     cur = conn.cursor()
     params = {"start": start, "end": end}
@@ -309,8 +298,8 @@ def get_rooms_booked(start: dt.date, end: dt.date, **options) -> int:
     return count[0]
 
 
+@BookeoUpdate
 def get_slots_booked(start: dt.date, end: dt.date, **options) -> int:
-    update_bookings()
     conn = get_db()
     cur = conn.cursor()
     params = {"start": start, "end": end}
@@ -328,8 +317,8 @@ def get_slots_booked(start: dt.date, end: dt.date, **options) -> int:
     return count[0]
 
 
+@BookeoUpdate
 def get_rooms_run(start: dt.date, end: dt.date, **options) -> int:
-    update_bookings()
     conn = get_db()
     cur = conn.cursor()
     params = {"start": start, "end": end}
@@ -347,8 +336,8 @@ def get_rooms_run(start: dt.date, end: dt.date, **options) -> int:
     return count[0]
 
 
+@BookeoUpdate
 def get_slots_run(start: dt.date, end: dt.date, **options) -> int:
-    update_bookings()
     conn = get_db()
     cur = conn.cursor()
     params = {"start": start, "end": end}
@@ -371,21 +360,15 @@ def get_revenue(start: dt.date, end: dt.date, **options) -> int:
 
 
 def generate_report(start: dt.date, end: dt.date, **options):
-    square_data = fetch_square_data(start, end, **options)
-    # print(start)
-    # print(end)
-    # print(options)
     rooms_booked = get_rooms_booked(start, end, **options)
     slots_booked = get_slots_booked(start, end, **options)
     rooms_run = get_rooms_run(start, end, **options)
     slots_run = get_slots_run(start, end, **options)
-    revenue = get_revenue(start, end, **options)
+    # revenue = get_revenue(start, end, **options)
     st.write(f"Rooms booked: {rooms_booked}")
     st.write(f"Slots booked: {slots_booked}")
     st.write(f"Rooms run: {rooms_run}")
     st.write(f"Slots run: {slots_run}")
-    rooms_run = 0
-    slots_run = 0
 
 
 def main():
@@ -432,7 +415,7 @@ def main():
         st.cache_data.clear()
     report_btn = st.button("Generate report")
     if report_btn:
-        report = generate_report(start_date, end_date, **report_options)
+        generate_report(start_date, end_date, **report_options)
 
 
 if __name__ == "__main__":
