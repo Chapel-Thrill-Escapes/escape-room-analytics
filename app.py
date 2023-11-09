@@ -9,6 +9,8 @@ import sqlite3
 import json
 from enum import Enum
 
+# TODO: Grab PIDs from bookings and insert into DB. Will need to redefine schema and write helper function.
+
 # TODO:
 # -> Square functionality <-
 # https://developer.squareup.com/reference/square/orders-api
@@ -48,6 +50,54 @@ def init_keys():
     os.environ["DATABASE"] = st.secrets["DATABASE_PATH"]
 
 
+def init_db():
+    db_path = os.environ["DATABASE"]
+    open(db_path, "w+").close()  # create file if not exists
+    # Set up tables
+    connection = sqlite3.connect(db_path, check_same_thread=False)
+    cur = connection.cursor()
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS bookings
+        (id INT PRIMARY KEY,
+        eventId INT NOT NULL,
+        startTime TEXT NOT NULL,
+        endTime TEXT NOT NULL,
+        customerId TEXT,
+        title TEXT,
+        canceled INT NOT NULL CHECK(canceled=0 OR canceled=1),
+        accepted INT NOT NULL CHECK(accepted=0 OR accepted=1),
+        sourceIP TEXT,
+        creationTime TEXT NOT NULL,
+        privateEvent INT NOT NULL CHECK(privateEvent=0 OR privateEvent=1),
+        noShow INT NOT NULL CHECK(noShow=0 OR noShow=1),
+        productId TEXT NOT NULL,
+        creationAgent TEXT,
+        FOREIGN KEY(productId) REFERENCES products(id))"""
+    )
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS participants (
+        bookingId INT NOT NULL,
+        firstName TEXT,
+        lastName TEXT,
+        peopleCategory TEXT,
+        pid TEXT,
+        FOREIGN KEY(peopleCategory) REFERENCES peopleCategories(id),
+        FOREIGN KEY(bookingId) REFERENCES bookings(id))"""
+    )
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS peopleCategories (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL)"""
+    )
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS products(
+        id TEXT PRIMARY KEY,
+        name TEXT)"""
+    )
+    connection.commit()
+    cur.close()
+
+
 @st.cache_resource
 def get_db() -> sqlite3.Connection:
     connection = sqlite3.connect(os.environ["DATABASE"], check_same_thread=False)
@@ -70,8 +120,8 @@ def update_bookings():
         :creationTime, :creationAgent, :productId, :privateEvent,
         :noShow)"""
     q2 = """INSERT INTO participants (bookingId, firstName,
-        lastName, peopleCategory)
-        VALUES (?, ?, ?, ?)"""
+        lastName, peopleCategory, pid)
+        VALUES (?, ?, ?, ?, ?)"""
 
     start = dt.date(year=2023, month=1, day=1)
     start = dt.datetime.combine(start, dt.time(0, 0, 0))
@@ -121,6 +171,10 @@ def update_bookings():
             )
             for booking in bookings:
                 participant_data = booking["participants"]["details"]
+                for p in participant_data:
+                    if p.get("personDetails") is None:
+                        p["firstName"] = None
+                        p["lastName"] = None
                 cur.executemany(
                     q2,
                     [
@@ -129,6 +183,7 @@ def update_bookings():
                             p.get("firstName"),
                             p.get("lastName"),
                             p["peopleCategoryId"],
+                            extract_pid(p),
                         )
                         for p in participant_data
                     ],
@@ -174,6 +229,10 @@ def update_bookings():
                 )
                 for booking in bookings:
                     participant_data = booking["participants"]["details"]
+                    for p in participant_data:
+                        if p.get("personDetails") is None:
+                            p["firstName"] = None
+                            p["lastName"] = None
                     cur.executemany(
                         q2,
                         [
@@ -182,6 +241,7 @@ def update_bookings():
                                 p.get("firstName"),
                                 p.get("lastName"),
                                 p["peopleCategoryId"],
+                                extract_pid(p),
                             )
                             for p in participant_data
                         ],
@@ -192,7 +252,17 @@ def update_bookings():
     cur.close()
 
 
-@st.cache_data(ttl="1 hour", show_spinner="Fetching group categories...")
+def extract_pid(participant: dict) -> str:
+    if (
+        "personDetails" in participant.keys()
+        and "customFields" in participant["personDetails"].keys()
+    ):
+        for f in participant["personDetails"]["customFields"]:
+            if f.get("name") == "PID":
+                return f.get("value", None)
+    return None
+
+
 def update_group_categories():
     return
     conn = get_db()
@@ -210,7 +280,6 @@ def extract_group_category(data: dict) -> str:
     return ""
 
 
-@st.cache_data(ttl="1 hour", show_spinner="Fetching pricing categories...")
 def update_people_categories():
     # https://www.bookeo.com/apiref/#tag/Settings/paths/~1settings~1peoplecategories/get
     res = requests.get(
@@ -244,7 +313,6 @@ def get_people_categories() -> list[str]:
     return [n[0] for n in names]
 
 
-@st.cache_data(ttl="1 hour", show_spinner="Fetching products...")
 def update_products():
     # https://www.bookeo.com/apiref/#tag/Settings/paths/~1settings~1products/get
     res = requests.get(
@@ -261,11 +329,12 @@ def update_products():
         return
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("DELETE FROM PRODUCTS")
-    names = [(p["name"], p["productCode"]) for p in data["data"]]
+    cur.execute("DELETE FROM products")
+    products = [(p["name"], p["productCode"]) for p in data["data"]]
     q = """INSERT INTO products (name, id)
         VALUES (?, ?)"""
-    cur.executemany(q, names)
+    print(products)
+    cur.executemany(q, products)
     conn.commit()
     cur.close()
 
@@ -410,9 +479,10 @@ def main():
     # "wages": st.checkbox("Wages"),
     # "bonuses": st.checkbox("Bonuses"),
     # "contact_method": st.checkbox("Contact method"),
-    force_cache_refresh = st.checkbox("Force cache refresh?")
-    if force_cache_refresh:
-        st.cache_data.clear()
+    # force_cache_refresh = st.checkbox("Force cache refresh?")
+    # if force_cache_refresh:
+
+    #     st.cache_data.clear()
     report_btn = st.button("Generate report")
     if report_btn:
         generate_report(start_date, end_date, **report_options)
@@ -420,4 +490,5 @@ def main():
 
 if __name__ == "__main__":
     init_keys()
+    init_db()
     main()
