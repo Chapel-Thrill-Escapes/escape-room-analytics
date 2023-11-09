@@ -11,6 +11,9 @@ from enum import Enum
 
 # TODO:
 # -> Square functionality <-
+# https://developer.squareup.com/reference/square/orders-api
+# https://developer.squareup.com/reference/square/payments-api
+# https://developer.squareup.com/reference/square/catalog-api
 # Revenue
 # - Bookings
 # - Invoices
@@ -25,8 +28,6 @@ from enum import Enum
 # -> Google functionality <-
 # Number of reviews (low priority)
 # Reviews by quality (low priority)
-# -> Security features <-
-# Login screen: https://blog.streamlit.io/streamlit-authenticator-part-1-adding-an-authentication-component-to-your-app/
 
 ZULU_FORMAT = "%Y-%m-%dT%H:%M:00Z"
 
@@ -53,7 +54,7 @@ def get_db() -> sqlite3.Connection:
     return connection
 
 
-@st.cache_data(ttl="1 hour")
+@st.cache_data(ttl="1 hour", show_spinner="Fetching latest bookings...")
 def update_bookings():
     # https://www.bookeo.com/apiref/#tag/Bookings/paths/~1bookings/get
     conn = get_db()
@@ -73,13 +74,14 @@ def update_bookings():
         VALUES (?, ?, ?, ?)"""
 
     start = dt.date(year=2023, month=1, day=1)
-    start = dt.datetime.combine(start, dt.time(0, 0))
-    end = dt.date.today()
-    end = dt.datetime.combine(end, dt.time(23, 59, 59))
+    start = dt.datetime.combine(start, dt.time(0, 0, 0))
+    end = dt.datetime.now()
     day_range = (end - start).days
     block_start = start
-    for _ in range((day_range // 31) + 1):
-        block_end = block_start + dt.timedelta(days=31)
+    for b in range(day_range // 30):
+        block_start = start + dt.timedelta(days=31 * b)
+        block_end = block_start + dt.timedelta(days=30)
+        block_end = dt.datetime.combine(block_end, dt.time(23, 59, 59))
         block_end = min(block_end, end)
         res = requests.get(
             "https://api.bookeo.com/v2/bookings",
@@ -185,13 +187,12 @@ def update_bookings():
                         ],
                     )
             page_number += 1
-        block_start = block_end + dt.timedelta(days=1)
 
     conn.commit()
     cur.close()
 
 
-@st.cache_data(ttl="1 hour")
+@st.cache_data(ttl="1 hour", show_spinner="Fetching group categories...")
 def update_group_categories():
     return
     conn = get_db()
@@ -209,7 +210,7 @@ def extract_group_category(data: dict) -> str:
     return ""
 
 
-@st.cache_data(ttl="1 hour")
+@st.cache_data(ttl="1 hour", show_spinner="Fetching pricing categories...")
 def update_people_categories():
     # https://www.bookeo.com/apiref/#tag/Settings/paths/~1settings~1peoplecategories/get
     res = requests.get(
@@ -221,7 +222,7 @@ def update_people_categories():
         headers={"User-Agent": os.environ["USER_AGENT"]},
     )
     data = res.json()
-    if "categories" not in data.keys():
+    if res.status_code != 200 or "categories" not in data.keys():
         return
     conn = get_db()
     cur = conn.cursor()
@@ -243,7 +244,7 @@ def get_people_categories() -> list[str]:
     return [n[0] for n in names]
 
 
-@st.cache_data(ttl="1 hour")
+@st.cache_data(ttl="1 hour", show_spinner="Fetching products...")
 def update_products():
     # https://www.bookeo.com/apiref/#tag/Settings/paths/~1settings~1products/get
     res = requests.get(
@@ -372,7 +373,6 @@ def generate_report(start: dt.date, end: dt.date, **options):
 
 
 def main():
-    update_bookings()
     st.write("# Escape Room Analytics")
     today = dt.datetime.now(pytz.timezone("US/Eastern"))
     start_date = st.date_input(
